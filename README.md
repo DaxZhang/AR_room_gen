@@ -1,4 +1,5 @@
 # Variational Graph Auto-encoder in Pytorch
+这个是当时fork过来没改的，我们聚类的部分运行layout_cluster即可
 This repository implements variational graph auto-encoder by Thomas Kipf. For details of the model, refer to his original [tensorflow implementation](https://github.com/tkipf/gae) and [his paper](https://arxiv.org/abs/1611.07308).
 
 # Requirements
