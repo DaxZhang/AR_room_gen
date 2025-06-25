@@ -145,8 +145,11 @@ class BboxFINCH:
         """
         self.bboxes_ = bboxes
         n_samples = len(bboxes)
+        if n_samples == 0:
+            return self
         current_data = bboxes.copy()
         current_labels = np.arange(n_samples, dtype=np.int32)  # Initial labels
+        original_labels = np.arange(n_samples, dtype=np.int32)
         
         while True:
             # Step 1: Compute pairwise distances and find first neighbors
@@ -167,18 +170,20 @@ class BboxFINCH:
             n_components, labels = connected_components(adjacency, directed=False)
             print(n_components,'  ', labels)
             # Map labels to original bboxes
-            original_labels = np.empty(n_samples, dtype=np.int32)
+            new_labels = np.empty(n_samples, dtype=np.int32)
             for new_label in range(n_components):
-                mask = (labels == new_label)
-                original_labels[current_labels[mask]] = new_label
+                indices = (labels == new_label).nonzero()
+                new_labels[np.isin(original_labels, indices)] = new_label
             
+            original_labels = new_labels
+
             # Store partition
             self.partitions_.append(original_labels.copy())
             
             #Finch算法是可进行递归进行层次聚类的，针对bounding box仍有bug，此处强制终止递归
             # Check stopping condition (only one cluster left)
-            if True:
-                break
+            # if True:
+            #     break
             if n_components == 1:
                 break
                 
@@ -250,7 +255,9 @@ class BboxFINCH:
                     best_score = score
                     best_part = part
             
-            return best_part
+            if best_part is not None: return best_part
+            if len(self.partitions_) > 0 : return self.partitions_[0] # trivial case: only one cluster
+            return None
         
 def get_file_num(folder, prefix):
     os.makedirs(folder, exist_ok=True)  # 确保文件夹存在
@@ -395,7 +402,7 @@ def cluster_objects_by_bbox(room_dict, eps=0.1, min_samples=2,method='bbox_min_d
     obj_list = room_dict.get('objList', [])
     n = len(obj_list)
     if n == 0:
-        return []
+        return [], np.array([[]])
 
     # 构造距离矩阵
     dist_matrix = np.zeros((n, n))
@@ -416,17 +423,25 @@ def cluster_objects_by_bbox(room_dict, eps=0.1, min_samples=2,method='bbox_min_d
     # 返回每个 object 的聚类标签（与 objList 同序）
     return labels, dist_matrix
 
+# silhouette_score_original = silhouette_score
+# def silhouette_score(*args, **kwargs):
+#     try:
+#         return silhouette_score_original(*args, **kwargs)
+#     except:
+#         return 1
+
 global Debug
 if __name__ == '__main__':
-    Debug = False 
+    Debug = False
     folder = Path('./data/scene_layout_json/')
     json_files = sorted(folder.glob("*.json")) 
+    if Debug:
+        json_files = ['data/scene_layout_json/01e1d6b2-e3b3-4eb4-9969-b23088fab6a0.json']
 
-    cluster_eval = {"DBSCAN":[],"expand_DBSCAN":[],"BboxFINCH":[]}
+    cluster_eval = {"DBSCAN":[],"expand_DBSCAN":[],"BboxFINCH":[], "BboxFINCHOptimal": []}
 
     for json_file in json_files:
-        if Debug:
-            json_file = './data/scene_layout_json/01aecd3d-1ed9-4d73-b8ef-50b50ea5fdb3.json'
+        
         with open(json_file, 'r', encoding='utf-8') as f:
             try:
                 data = json.load(f)
@@ -444,32 +459,37 @@ if __name__ == '__main__':
                 finch.fit(obj_bboxes)
                 partitions = finch.get_partitions()
                 labels2 = partitions[0]
+                print("Partitions:", partitions)
                 labels3 = finch.get_optimal_partition() #暂时有错
 
                 #定量指标 轮廓系数
                 DBSCAN_score = silhouette_score(original_dist_matrix, labels0, metric='precomputed')
                 expand_DBSCAN_score = silhouette_score(original_dist_matrix, labels1, metric='precomputed')
                 Finch_score = silhouette_score(original_dist_matrix, labels2, metric='precomputed')
+                Finch_optimal_score = silhouette_score(original_dist_matrix, labels3, metric='precomputed')
                 cluster_eval['DBSCAN'].append(DBSCAN_score)
                 cluster_eval['expand_DBSCAN'].append(expand_DBSCAN_score)
                 cluster_eval['BboxFINCH'].append(Finch_score)
-                drawing = False #控制是否绘制图像，保存在./runs/layout_cluster_vis/
+                cluster_eval['BboxFINCHOptimal'].append(Finch_optimal_score)
+                drawing = True #控制是否绘制图像，保存在./runs/layout_cluster_vis/
                 if drawing:
                     fig1 = draw_room_clusters(room, labels1)
                     fig2 = draw_room_clusters(room, labels2)
+                    fig3 = draw_room_clusters(room, labels3)
                     # if labels3 is not None:
                     #     fig3 = draw_room_clusters(room, labels3)
                     if fig1 is not None and fig2 is not None:
                         if Debug:
                             pass
                         else:
-                            save_figure(fig1, prefix=f"clusterVis_{json_file.stem}",end_with="_1")
-                            save_figure(fig2, prefix=f"clusterVis_{json_file.stem}",end_with="_2")
-                            # if labels3 is not None:
-                            #     save_figure(fig3, prefix=f"clusterVis_{json_file.stem}",end_with="_3")
+                            save_figure(fig1, prefix=f"clusterVis_{json_file.stem}",end_with="_expand_DBSCAN")
+                            save_figure(fig2, prefix=f"clusterVis_{json_file.stem}",end_with="_FINCH")
+                            if labels3 is not None:
+                                save_figure(fig3, prefix=f"clusterVis_{json_file.stem}",end_with="_FINCH_Optimal")
                         # plt.show()
             except Exception as e:
                 print(f"Error processing , skipping. {e}")
+                # raise e
         
         print(f"DBSCAN_score_mean:{np.mean(cluster_eval['DBSCAN'])},expand_DBSCAN_score_mean:{np.mean(cluster_eval['expand_DBSCAN'])},BboxFINCH_score_mean:{np.mean(cluster_eval['BboxFINCH'])} ")
 
@@ -480,6 +500,7 @@ if __name__ == '__main__':
     sns.kdeplot(cluster_eval['DBSCAN'], fill=True, label='DBSCAN')
     sns.kdeplot(cluster_eval['expand_DBSCAN'], fill=True, label='expand_DBSCAN')
     sns.kdeplot(cluster_eval['BboxFINCH'], fill=True, label='FINCH')
+    sns.kdeplot(cluster_eval['BboxFINCHOptimal'], fill=True, label='FINCHOptimal')
     plt.xlabel('Value')
     plt.ylabel('Density')
     plt.title('silhouette score Distribution Comparison')
